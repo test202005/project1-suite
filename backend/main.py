@@ -26,6 +26,41 @@ def get_today_str() -> str:
     return date.today().strftime("%Y-%m-%d")
 
 
+def generate_summary(fragments: List[Dict[str, Any]]) -> str:
+    """
+    生成今日总结文本
+    """
+    # 提取所有工作碎片（排除 summary 类型）
+    work_items = [f for f in fragments if f.get("type") != "summary" and f.get("content")]
+
+    if not work_items:
+        return """今日完成
+- 无
+
+问题/风险
+- 无
+
+明日计划
+- 待定"""
+
+    # 提取工作内容
+    completed = [item["content"] for item in work_items[:5]]
+
+    # 生成总结
+    summary_lines = []
+    summary_lines.append("今日完成")
+    for item in completed:
+        summary_lines.append(f"- {item}")
+
+    summary_lines.append("\n问题/风险")
+    summary_lines.append("- 无")
+
+    summary_lines.append("\n明日计划")
+    summary_lines.append("- 待定")
+
+    return "\n".join(summary_lines)
+
+
 SYSTEM_PROMPT = """
 你是一个“个人工作风险防御”助手，核心目标是：记录干净事实碎片、执行打卡确认/超时记录、查询碎片与打卡状态。
 
@@ -226,8 +261,37 @@ def run_once_with_structured_response(
     # 2) 确定性意图路由（不依赖模型）
     action = None
 
+    # summary 路由（最高优先级）
+    if text == "总结今日":
+        from tools import get_fragments_by_date, record_fragment
+
+        # 1) 读取今天的碎片
+        fragments_result = get_fragments_by_date(date=today_str, author=author)
+        all_fragments = fragments_result.get("items", [])
+
+        # 2) 生成总结
+        summary_text = generate_summary(all_fragments)
+
+        # 3) 保存 summary fragment
+        record_fragment(
+            content=summary_text,
+            source="user",
+            author=author,
+            occurred_date=today_str
+        )
+
+        # 4) 返回更新后的碎片列表
+        updated_fragments = get_fragments_by_date(date=today_str, author=author)
+        return {
+            "ok": True,
+            "action": "summary",
+            "tool_called": "generate_summary",
+            "today_fragments": updated_fragments.get("items", []),
+            "input_text": user_text
+        }
+
     # reject 路由
-    if any(keyword in text for keyword in ["日报", "周报", "总结"]):
+    elif any(keyword in text for keyword in ["日报", "周报"]):
         return {
             "ok": True,
             "action": "reject",

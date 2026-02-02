@@ -12,7 +12,8 @@ function App() {
   const [fragments, setFragments] = useState<Fragment[]>([]);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
-  const [clockedIn, setClockedIn] = useState(false); // Mock 状态
+  const [clockedIn, setClockedIn] = useState(false);
+  const [summary, setSummary] = useState<string | null>(null);
   const [isAllView, setIsAllView] = useState(false);
 
   // 初始化：从 localStorage 读取 author 并查询今日碎片
@@ -28,12 +29,7 @@ function App() {
       }).then(response => {
         if (response.ok) {
           if (response.today_fragments.length > 0) {
-            setFragments(response.today_fragments);
-            // 检测是否已打卡
-            const hasClockIn = response.today_fragments.some(f =>
-              f.content.includes('打卡') || f.content.includes('出勤')
-            );
-            setClockedIn(hasClockIn);
+            updateFragments(response.today_fragments);
           }
         }
       }).catch(err => {
@@ -43,6 +39,36 @@ function App() {
       setShowAuthorModal(true);
     }
   }, []);
+
+  // 提取 summary（辅助函数）
+  const extractSummary = (fragmentsList: Fragment[]): string | null => {
+    // 查找最新的 summary（content 以"今日完成"开头的）
+    for (let i = fragmentsList.length - 1; i >= 0; i--) {
+      if (fragmentsList[i].content.startsWith('今日完成')) {
+        return fragmentsList[i].content;
+      }
+    }
+    return null;
+  };
+
+  // 更新 fragments 并同步状态
+  const updateFragments = (fragmentsList: Fragment[]) => {
+    setFragments(fragmentsList);
+
+    // 同步打卡状态
+    const hasClockIn = fragmentsList.some(f =>
+      f.content.includes('打卡') || f.content.includes('出勤')
+    );
+    if (hasClockIn !== clockedIn) {
+      setClockedIn(hasClockIn);
+    }
+
+    // 同步 summary
+    const summaryText = extractSummary(fragmentsList);
+    if (summaryText) {
+      setSummary(summaryText);
+    }
+  };
 
   // 提交输入
   const handleSubmit = async (inputText?: string) => {
@@ -70,16 +96,9 @@ function App() {
       });
 
       if (response.ok) {
-        // 只在有新数据时更新列表
+        // 更新碎片列表和状态
         if (response.today_fragments.length > 0) {
-          setFragments(response.today_fragments);
-          // 检测是否已打卡
-          const hasClockIn = response.today_fragments.some(f =>
-            f.content.includes('打卡') || f.content.includes('出勤')
-          );
-          if (hasClockIn !== clockedIn) {
-            setClockedIn(hasClockIn);
-          }
+          updateFragments(response.today_fragments);
         }
 
         // 未打卡提醒（不阻断）
@@ -126,7 +145,7 @@ function App() {
           author: newValue ? 'all' : author!,
         });
         if (response.ok) {
-          setFragments(response.today_fragments);
+          updateFragments(response.today_fragments);
         }
       } catch (err) {
         console.error('切换视图失败:', err);
@@ -157,9 +176,9 @@ function App() {
         setToast('打卡成功');
         setTimeout(() => setToast(''), 2000);
 
-        // 更新碎片列表
+        // 更新碎片列表和状态
         if (response.today_fragments.length > 0) {
-          setFragments(response.today_fragments);
+          updateFragments(response.today_fragments);
         }
       } else {
         setError(response.error || '打卡失败');
@@ -257,6 +276,14 @@ function App() {
 
         {/* Toast */}
         {toast && <div className="toast">{toast}</div>}
+
+        {/* Summary Card */}
+        {summary && (
+          <section className="summary-card">
+            <h3>📋 今日总结</h3>
+            <pre className="summary-content">{summary}</pre>
+          </section>
+        )}
 
         {/* Quick Actions */}
         <section className="quick-actions">

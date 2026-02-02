@@ -187,6 +187,29 @@ body {
   cursor: not-allowed;
 }
 
+/* Summary Card */
+.summary-card {
+  background: #f6ffed;
+  padding: 16px 20px;
+  border-radius: 8px;
+  border: 1px solid #b7eb8f;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.summary-card h3 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  color: #389e0d;
+}
+
+.summary-content {
+  margin: 0;
+  font-size: 14px;
+  color: #333;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
 /* Quick Actions */
 .quick-actions {
   display: flex;
