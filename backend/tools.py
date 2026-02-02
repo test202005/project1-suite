@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional
 
@@ -192,6 +193,97 @@ def _read_jsonl(path: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _rewrite_jsonl_filtered(path: str, filter_fn) -> None:
+    """
+    重写 JSONL 文件，过滤掉不符合条件的记录
+
+    Args:
+        path: JSONL 文件路径
+        filter_fn: 过滤函数，接受一个 Dict，返回 True 表示保留
+    """
+    if not os.path.exists(path):
+        return
+
+    items = _read_jsonl(path)
+    filtered_items = [item for item in items if filter_fn(item)]
+
+    _ensure_data_dir()
+    with open(path, "w", encoding="utf-8") as f:
+        for item in filtered_items:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+    print(f"[DEBUG] Rewrote {path}: {len(items)} -> {len(filtered_items)} items")
+
+
+def generate_fragment_id() -> str:
+    """生成唯一的 fragment ID"""
+    return uuid.uuid4().hex
+
+
+def delete_fragment_by_id(fragment_id: str) -> Dict[str, Any]:
+    """
+    按 ID 删除 fragment
+
+    Args:
+        fragment_id: fragment 的 id 字段
+
+    Returns:
+        {"ok": true, "deleted_id": "...", "today_fragments": [...]}
+        或 {"ok": false, "error": "..."}
+    """
+    if not fragment_id:
+        return {"ok": False, "error": "missing fragment_id"}
+
+    # 读取所有碎片
+    all_fragments = _read_jsonl(FRAGMENTS_PATH)
+
+    # 找到要删除的碎片
+    target_fragment = None
+    for frag in all_fragments:
+        if frag.get("id") == fragment_id:
+            target_fragment = frag
+            break
+
+    if not target_fragment:
+        return {"ok": False, "error": f"fragment not found: {fragment_id}"}
+
+    # 获取该碎片的日期和作者（用于查询更新后的列表）
+    occurred_date = target_fragment.get("occurred_date")
+    author = target_fragment.get("author")
+
+    # 过滤掉该碎片
+    filtered_fragments = [f for f in all_fragments if f.get("id") != fragment_id]
+
+    # 重写文件
+    _ensure_data_dir()
+    with open(FRAGMENTS_PATH, "w", encoding="utf-8") as f:
+        for item in filtered_fragments:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+    print(f"[DEBUG] Deleted fragment {fragment_id}, {len(all_fragments)} -> {len(filtered_fragments)} items")
+
+    # 如果有日期和作者，返回更新后的今日碎片
+    if occurred_date and author:
+        from datetime import date
+        today_str = date.today().strftime("%Y-%m-%d")
+
+        # 如果是今天的碎片，返回今日列表
+        if occurred_date == today_str:
+            # 只返回该作者的碎片
+            today_fragments = [f for f in filtered_fragments if f.get("occurred_date") == today_str and f.get("author") == author]
+            return {
+                "ok": True,
+                "deleted_id": fragment_id,
+                "today_fragments": today_fragments
+            }
+
+    return {
+        "ok": True,
+        "deleted_id": fragment_id,
+        "today_fragments": []
+    }
+
+
 # =========================
 # 3) Tool implementations
 # =========================
@@ -200,6 +292,7 @@ def record_fragment(content: str, source: str, author: str, occurred_date: Optio
     if not occurred_date:
         occurred_date = date.today().strftime("%Y-%m-%d")
     item = {
+        "id": generate_fragment_id(),
         "type": "fragment",
         "content": content.strip(),
         "occurred_date": occurred_date,

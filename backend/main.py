@@ -14,7 +14,7 @@ from input_normalizer import normalize_input
 
 from zhipuai import ZhipuAI
 
-from tools import function_schemas, dispatch_tool_call
+from tools import function_schemas, dispatch_tool_call, FRAGMENTS_PATH, _append_jsonl, _now_iso, _rewrite_jsonl_filtered, generate_fragment_id
 
 
 MODEL_NAME = os.getenv("ZHIPU_MODEL", "glm-4.5")
@@ -29,9 +29,22 @@ def get_today_str() -> str:
 def generate_summary(fragments: List[Dict[str, Any]]) -> str:
     """
     生成今日总结文本
+
+    Args:
+        fragments: 碎片列表（应该已过滤掉 summary 类型）
     """
-    # 提取所有工作碎片（排除 summary 类型）
-    work_items = [f for f in fragments if f.get("type") != "summary" and f.get("content")]
+    # 过滤工作碎片：排除 summary + 排除打卡类
+    def is_work_fragment(f: Dict[str, Any]) -> bool:
+        content = f.get("content", "")
+        return (
+            f.get("type") != "summary" and
+            f.get("content") and
+            "打卡" not in content and
+            "已完成打卡" not in content and
+            "正常出勤" not in content
+        )
+
+    work_items = [f for f in fragments if is_work_fragment(f)]
 
     if not work_items:
         return """今日完成
@@ -43,8 +56,8 @@ def generate_summary(fragments: List[Dict[str, Any]]) -> str:
 明日计划
 - 待定"""
 
-    # 提取工作内容
-    completed = [item["content"] for item in work_items[:5]]
+    # 提取工作内容（取前 8 条）
+    completed = [item["content"] for item in work_items[:8]]
 
     # 生成总结
     summary_lines = []
@@ -240,7 +253,8 @@ def run_once(client: ZhipuAI, user_text: str) -> str:
 def run_once_with_structured_response(
     client: ZhipuAI,
     user_text: str,
-    author: str
+    author: str,
+    target_date: Optional[str] = None  # 新增参数
 ) -> Dict[str, Any]:
     """
     返回结构化响应，供 API 调用
@@ -258,30 +272,65 @@ def run_once_with_structured_response(
     today_str = get_today_str()
     text = norm.get("clean_text", user_text)
 
+    # 新增：确定目标日期
+    query_date = target_date if target_date else today_str
+
+    print(f"[DEBUG] Using date: {query_date} (target_date={target_date}, today={today_str})")
+
     # 2) 确定性意图路由（不依赖模型）
     action = None
 
-    # summary 路由（最高优先级）
-    if text == "总结今日":
-        from tools import get_fragments_by_date, record_fragment
+    # summary 路由（最高优先级）- 包含判断
+    print(f"[DEBUG] summary check: text='{text}', original='{user_text}'")
 
-        # 1) 读取今天的碎片
-        fragments_result = get_fragments_by_date(date=today_str, author=author)
+    if "总结今日" in text:
+        print(f"[DEBUG] summary route triggered for author={author}")
+
+        # 1) 删除今日所有旧的 summary（幂等性）
+        def filter_old_summaries(item: Dict[str, Any]) -> bool:
+            # 保留非今日 summary，或者今日非 summary 类型的记录
+            is_today_summary = (
+                item.get("occurred_date") == query_date and
+                item.get("type") == "summary"
+            )
+            return not is_today_summary
+
+        _rewrite_jsonl_filtered(FRAGMENTS_PATH, filter_old_summaries)
+        print(f"[DEBUG] summary: deleted old summaries for {query_date}")
+
+        # 2) 读取今天的碎片（只取 type=fragment 的）
+        fragments_result = get_fragments_by_date(date=query_date, author=author)
         all_fragments = fragments_result.get("items", [])
 
-        # 2) 生成总结
-        summary_text = generate_summary(all_fragments)
+        # 只取非 summary 类型的碎片
+        work_fragments = [f for f in all_fragments if f.get("type") != "summary"]
 
-        # 3) 保存 summary fragment
-        record_fragment(
-            content=summary_text,
-            source="user",
-            author=author,
-            occurred_date=today_str
-        )
+        print(f"[DEBUG] summary: found {len(work_fragments)} work fragments")
 
-        # 4) 返回更新后的碎片列表
-        updated_fragments = get_fragments_by_date(date=today_str, author=author)
+        # 3) 生成总结（已过滤打卡类碎片，取前 8 条）
+        summary_text = generate_summary(work_fragments)
+
+        print(f"[DEBUG] summary: generated summary\n{summary_text}")
+
+        # 4) 手动写入新的 summary fragment（type="summary"）
+        summary_item = {
+            "id": generate_fragment_id(),
+            "type": "summary",
+            "content": summary_text,
+            "occurred_date": query_date,
+            "source": "user",
+            "author": author,
+            "tags": [],
+            "created_at": _now_iso(),
+        }
+        _append_jsonl(FRAGMENTS_PATH, summary_item)
+        print(f"[DEBUG] summary: written to {FRAGMENTS_PATH}")
+
+        # 5) 返回更新后的碎片列表
+        updated_fragments = get_fragments_by_date(date=query_date, author=author)
+
+        print(f"[DEBUG] summary: returning {len(updated_fragments.get('items', []))} fragments")
+
         return {
             "ok": True,
             "action": "summary",
@@ -300,25 +349,28 @@ def run_once_with_structured_response(
             "input_text": user_text
         }
 
-    # confirm 路由
+    # confirm 路由（打卡）
     elif "打卡" in text:
-        action = "confirm"
-        # 调用 confirm_clock_event
-        tool_result = dispatch_tool_call(
-            name="confirm_clock_event",
-            args={
-                "event_type": "start_work",
-                "confirmed_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                "channel": "manual"
-            },
-            author=None
+        # ✅ 直接写入 fragment 记录（不用 confirm_clock_event）
+        record_fragment(
+            content="今天正常出勤，已完成打卡",
+            source="user",
+            author=author,
+            occurred_date=query_date
+        )
+
+        # ✅ 查询并返回今日碎片
+        query_author = None if author == "all" else author
+        fragments_result = get_fragments_by_date(
+            date=query_date,
+            author=query_author
         )
 
         return {
             "ok": True,
             "action": "confirm",
-            "tool_called": "confirm_clock_event",
-            "today_fragments": [],
+            "tool_called": "record_fragment",
+            "today_fragments": fragments_result.get("items", []),
             "input_text": user_text
         }
 
@@ -330,7 +382,7 @@ def run_once_with_structured_response(
         print(f"[DEBUG] query: original_author={author}, query_author={query_author}, today={today_str}")
 
         fragments_result = get_fragments_by_date(
-            date=today_str,
+            date=query_date,
             author=query_author
         )
 
@@ -361,19 +413,19 @@ def run_once_with_structured_response(
 
         if can_record:
             # 满足事实门槛，执行 record
-            print(f"[DEBUG] record: today_str={today_str}, author={author}")
+            print(f"[DEBUG] record: query_date={query_date}, author={author}")
 
             # 1) 写入碎片
             record_fragment(
                 content=text,
                 source="user",
                 author=author,
-                occurred_date=today_str
+                occurred_date=query_date
             )
 
             # 2) 立刻查询该作者的今日碎片
             fragments_result = get_fragments_by_date(
-                date=today_str,
+                date=query_date,
                 author=author
             )
 
@@ -392,7 +444,7 @@ def run_once_with_structured_response(
 
             query_author = None if author == "all" else author
             fragments_result = get_fragments_by_date(
-                date=today_str,
+                date=query_date,
                 author=query_author
             )
 

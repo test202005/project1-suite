@@ -1,0 +1,20 @@
+# Python
+backend/__pycache__
+backend/*.log
+backend/.env
+backend/.pytest_cache
+
+# Node.js
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo

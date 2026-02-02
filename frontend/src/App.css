@@ -63,6 +63,19 @@ body {
   color: #666;
 }
 
+.date-picker {
+  padding: 6px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.date-picker:hover {
+  border-color: #999;
+}
+
 .icon-btn {
   background: none;
   border: 1px solid #ddd;
@@ -308,6 +321,27 @@ body {
 .fragment-time {
   font-size: 12px;
   color: #999;
+}
+
+.delete-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 8px;
+  margin-left: 8px;
+  opacity: 0.6;
+  transition: all 0.2s;
+}
+
+.delete-btn:hover {
+  opacity: 1;
+  color: #ff4d4f;
+}
+
+.delete-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 /* Modal */

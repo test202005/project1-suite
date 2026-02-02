@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { submitInput, type ApiResponse, type Fragment } from './api';
+import { submitInput, deleteFragment, type ApiResponse, type Fragment } from './api';
 import { getAuthor, setAuthor, clearAuthor } from './storage';
 import './App.css';
 
@@ -15,6 +15,17 @@ function App() {
   const [clockedIn, setClockedIn] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
   const [isAllView, setIsAllView] = useState(false);
+  // 日期选择：每次刷新页面都回到今天，不持久化到 localStorage
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day = String(today.getDate()).padStart(2, '0');
+    const todayStr = `${year}-${month}-${day}`;
+    console.log('[App Init] Today date:', todayStr);
+    return todayStr;
+  });
+  const [deleteConfirm, setDeleteConfirm] = useState<Fragment | null>(null);
 
   // 初始化：从 localStorage 读取 author 并查询今日碎片
   useEffect(() => {
@@ -26,6 +37,7 @@ function App() {
       submitInput({
         text: '今天做了啥',
         author: savedAuthor,
+        date: selectedDate,
       }).then(response => {
         if (response.ok) {
           if (response.today_fragments.length > 0) {
@@ -42,9 +54,9 @@ function App() {
 
   // 提取 summary（辅助函数）
   const extractSummary = (fragmentsList: Fragment[]): string | null => {
-    // 查找最新的 summary（content 以"今日完成"开头的）
+    // 查找最新的 type="summary" 的记录
     for (let i = fragmentsList.length - 1; i >= 0; i--) {
-      if (fragmentsList[i].content.startsWith('今日完成')) {
+      if (fragmentsList[i].type === 'summary') {
         return fragmentsList[i].content;
       }
     }
@@ -67,6 +79,26 @@ function App() {
     const summaryText = extractSummary(fragmentsList);
     if (summaryText) {
       setSummary(summaryText);
+    }
+  };
+
+  // 日期变更处理
+  const handleDateChange = async (newDate: string) => {
+    setSelectedDate(newDate);
+
+    // 查询该日期的数据
+    try {
+      const response = await submitInput({
+        text: '今天做了啥',
+        author: isAllView ? 'all' : author!,
+        date: newDate,
+      });
+
+      if (response.ok) {
+        updateFragments(response.today_fragments);
+      }
+    } catch (err) {
+      console.error('切换日期失败:', err);
     }
   };
 
@@ -93,6 +125,7 @@ function App() {
       const response = await submitInput({
         text: textToSubmit,
         author: isAllView ? 'all' : author,
+        date: selectedDate,
       });
 
       if (response.ok) {
@@ -143,6 +176,7 @@ function App() {
         const response = await submitInput({
           text: '今天做了啥',
           author: newValue ? 'all' : author!,
+          date: selectedDate,
         });
         if (response.ok) {
           updateFragments(response.today_fragments);
@@ -169,6 +203,7 @@ function App() {
       const response = await submitInput({
         text: '今天正常出勤，已完成打卡',
         author: author,
+        date: selectedDate,
       });
 
       if (response.ok) {
@@ -190,12 +225,45 @@ function App() {
     }
   };
 
+  // 删除碎片
+  const handleDeleteFragment = async (fragment: Fragment) => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const response = await deleteFragment(fragment.id);
+
+      if (response.ok) {
+        // 用返回的 today_fragments 更新列表
+        if (response.today_fragments) {
+          updateFragments(response.today_fragments);
+        }
+        setToast('删除成功');
+        setTimeout(() => setToast(''), 2000);
+      } else {
+        setError(response.error || '删除失败');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '���络错误');
+    } finally {
+      setLoading(false);
+      setDeleteConfirm(null);
+    }
+  };
+
   return (
     <div className="app">
       {/* Header */}
       <header className="header">
         <h1>Punch Agent</h1>
         <div className="header-controls">
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => handleDateChange(e.target.value)}
+            className="date-picker"
+            title="选择日期"
+          />
           <span className="clock-status">
             今日打卡：{clockedIn ? '已完成' : '未完成'}
           </span>
@@ -251,6 +319,26 @@ function App() {
         </div>
       )}
 
+      {/* Delete Confirm Modal */}
+      {deleteConfirm && (
+        <div className="modal-overlay" onClick={() => setDeleteConfirm(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>确认删除</h2>
+            <p>确定要删除这条记录吗？</p>
+            <p className="hint">{deleteConfirm.content.substring(0, 100)}...</p>
+            <div className="modal-actions">
+              <button onClick={() => setDeleteConfirm(null)}>取消</button>
+              <button
+                className="primary"
+                onClick={() => handleDeleteFragment(deleteConfirm)}
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Content */}
       <main className="main">
         {/* Input Card */}
@@ -296,7 +384,7 @@ function App() {
             </button>
           )}
           <button
-            onClick={() => quickSubmit('今天做了啥')}
+            onClick={() => quickSubmit('总结今日')}
             disabled={loading}
           >
             📋 总结今日
@@ -328,6 +416,14 @@ function App() {
                       minute: '2-digit',
                     })}
                   </span>
+                  <button
+                    className="delete-btn"
+                    onClick={() => setDeleteConfirm(fragment)}
+                    title="删除"
+                    disabled={loading}
+                  >
+                    🗑
+                  </button>
                 </li>
               ))}
             </ul>
