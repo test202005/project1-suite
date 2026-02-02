@@ -26,8 +26,15 @@ function App() {
         text: '今天做了啥',
         author: savedAuthor,
       }).then(response => {
-        if (response.ok && response.today_fragments.length > 0) {
-          setFragments(response.today_fragments);
+        if (response.ok) {
+          if (response.today_fragments.length > 0) {
+            setFragments(response.today_fragments);
+            // 检测是否已打卡
+            const hasClockIn = response.today_fragments.some(f =>
+              f.content.includes('打卡') || f.content.includes('出勤')
+            );
+            setClockedIn(hasClockIn);
+          }
         }
       }).catch(err => {
         console.error('初始化查询失败:', err);
@@ -66,6 +73,13 @@ function App() {
         // 只在有新数据时更新列表
         if (response.today_fragments.length > 0) {
           setFragments(response.today_fragments);
+          // 检测是否已打卡
+          const hasClockIn = response.today_fragments.some(f =>
+            f.content.includes('打卡') || f.content.includes('出勤')
+          );
+          if (hasClockIn !== clockedIn) {
+            setClockedIn(hasClockIn);
+          }
         }
 
         // 未打卡提醒（不阻断）
@@ -125,10 +139,36 @@ function App() {
     handleSubmit(quickText);
   };
 
-  // 打卡按钮（本迭代只显示提示）
-  const handleClockIn = () => {
-    setToast('打卡功能将在后续迭代中支持');
-    setTimeout(() => setToast(''), 3000);
+  // 打卡按钮
+  const handleClockIn = async () => {
+    if (!author) return;
+
+    setLoading(true);
+    setToast('');
+
+    try {
+      const response = await submitInput({
+        text: '今天正常出勤，已完成打卡',
+        author: author,
+      });
+
+      if (response.ok) {
+        setClockedIn(true);
+        setToast('打卡成功');
+        setTimeout(() => setToast(''), 2000);
+
+        // 更新碎片列表
+        if (response.today_fragments.length > 0) {
+          setFragments(response.today_fragments);
+        }
+      } else {
+        setError(response.error || '打卡失败');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '网络错误');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -220,12 +260,14 @@ function App() {
 
         {/* Quick Actions */}
         <section className="quick-actions">
-          <button
-            onClick={handleClockIn}
-            disabled={loading}
-          >
-            ⏰ 帮我打卡
-          </button>
+          {!clockedIn && (
+            <button
+              onClick={handleClockIn}
+              disabled={loading}
+            >
+              ⏰ 帮我打卡
+            </button>
+          )}
           <button
             onClick={() => quickSubmit('今天做了啥')}
             disabled={loading}
