@@ -17,6 +17,12 @@ from typing import Any, Dict, List, Optional
 DATA_DIR = os.getenv("DATA_DIR", ".")
 FRAGMENTS_PATH = os.path.join(DATA_DIR, "fragments.jsonl")
 CLOCK_PATH = os.path.join(DATA_DIR, "clock.json")
+_FRAGMENTS_PATH_OVERRIDE = None  # 测试时可覆盖写入路径
+
+
+def get_fragments_path() -> str:
+    """获取 fragments 文件路径（支持测试覆盖）"""
+    return _FRAGMENTS_PATH_OVERRIDE if _FRAGMENTS_PATH_OVERRIDE else FRAGMENTS_PATH
 
 
 # =========================
@@ -173,11 +179,17 @@ def _save_clock(clock: Dict[str, Any]) -> None:
 
 def _append_jsonl(path: str, obj: Dict[str, Any]) -> None:
     _ensure_data_dir()
+    # 如果传入的是默认路径且设置了 override，使用 override；否则用传入的 path
+    if path == FRAGMENTS_PATH and _FRAGMENTS_PATH_OVERRIDE:
+        path = _FRAGMENTS_PATH_OVERRIDE
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
 
 def _read_jsonl(path: str) -> List[Dict[str, Any]]:
+    # 如果传入的是默认路径且设置了 override，使用 override
+    if path == FRAGMENTS_PATH and _FRAGMENTS_PATH_OVERRIDE:
+        path = _FRAGMENTS_PATH_OVERRIDE
     if not os.path.exists(path):
         return []
     out: List[Dict[str, Any]] = []
